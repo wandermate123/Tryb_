@@ -19,6 +19,9 @@ export const metadata: Metadata = {
   title: "Tryb Studios — Outbound",
   description:
     "B2B outbound for e-commerce, F&B, and hospitality: search, AI pitches, email, and logged results in one dashboard.",
+  icons: {
+    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+  },
 };
 
 export default function RootLayout({
