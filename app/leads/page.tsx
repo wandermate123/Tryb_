@@ -81,7 +81,13 @@ export default async function LeadsPage() {
                 </p>
                 <p style={{ margin: "0 0 0.75rem", fontSize: "0.92rem" }}>
                   <strong style={{ color: "var(--text-muted)" }}>Email:</strong>{" "}
-                  <span style={{ color: "var(--accent)" }}>{lead.directEmail}</span>
+                  {lead.directEmail ? (
+                    <a style={{ color: "var(--accent)" }} href={`mailto:${lead.directEmail}`}>
+                      {lead.directEmail}
+                    </a>
+                  ) : (
+                    <span style={{ color: "var(--text-muted)" }}>Not from Apollo yet</span>
+                  )}
                 </p>
                 <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--text-muted)" }}>
                   Sent {lead.createdAt.toISOString()}

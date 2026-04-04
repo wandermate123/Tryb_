@@ -41,6 +41,9 @@ export function SiteHeader() {
           <Link href="/leads" style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
             Leads
           </Link>
+          <Link href="/leads-sheet" style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
+            Sheet
+          </Link>
         </nav>
       </div>
     </header>

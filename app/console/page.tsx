@@ -102,8 +102,13 @@ export default function ConsolePage() {
             <ul className="checklist">
               <CheckRow
                 ok={env.databaseUrl}
-                label="Supabase / Postgres"
-                detail="DATABASE_URL — create a project, copy the connection string (pooler URI for serverless)."
+                label="Supabase / Postgres (pooler)"
+                detail="DATABASE_URL — transaction pooler URI (e.g. :6543) for the running app."
+              />
+              <CheckRow
+                ok={env.directUrl}
+                label="Supabase (migrations / Prisma)"
+                detail="DIRECT_URL — session pooler :5432 or direct host; required in prisma/schema.prisma."
               />
               <CheckRow
                 ok={env.apolloApiKey}

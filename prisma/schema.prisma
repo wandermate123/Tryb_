@@ -10,15 +10,28 @@ datasource db {
 
 model OutboundLead {
   id               String   @id @default(cuid())
+  /// Apollo person id — prevents duplicate rows on re-runs
+  apolloPersonId   String?  @unique
   firstName        String
   lastName         String
   companyName      String
   industry         String
-  directEmail      String
+  /// Contact email when Apollo reveals it; null if not unlocked / not returned
+  directEmail      String?
+  /// Role / title of the person of contact when known (e.g. Founder, MD)
+  jobTitle         String?
+  /// Generic or corporate email for the company when Apollo returns one
+  companyEmail     String?
+  /// Primary domain for the company (from enrichment), useful if company email is empty
+  companyDomain    String?
+  linkedinUrl      String?
+  instagramUrl     String?
+  /// Notes on opportunity / pipeline (auto-filled on create; you can edit in DB later)
+  opportunity      String?  @db.Text
   aiGeneratedPitch String   @db.Text
   status           String   @default("Sent")
   createdAt        DateTime @default(now())
 
-  @@index([directEmail])
   @@index([createdAt])
+  @@index([companyName])
 }

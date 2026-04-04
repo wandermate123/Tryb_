@@ -4,6 +4,8 @@ import { useCallback, useState } from "react";
 
 export type OutboundRunSummary = {
   ok?: boolean;
+  emailSendSkipped?: boolean;
+  stored?: number;
   sent?: number;
   skipped?: number;
   searchCount?: number;

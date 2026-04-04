@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { HeroOutboundCTA } from "@/app/components/HeroOutboundCTA";
-import { getEnvConfigurationStatus, isOutboundReady } from "@/lib/env-status";
+import {
+  getEnvConfigurationStatus,
+  getMissingOutboundEnvNames,
+  isOutboundReady,
+} from "@/lib/env-status";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function HomePage() {
   const env = getEnvConfigurationStatus();
   const ready = isOutboundReady(env);
+  const missingEnv = getMissingOutboundEnvNames(env);
 
   let recent: Awaited<ReturnType<typeof prisma.outboundLead.findMany>> = [];
   let total = 0;
@@ -38,7 +43,11 @@ export default async function HomePage() {
             <p className="landing__eyebrow">Tryb Studios · Outbound</p>
             <h1 className="landing__title">Turn cold leads into conversations.</h1>
             <p className="landing__deck">Outbound, logged.</p>
-            <HeroOutboundCTA requiresCronAuth={env.cronSecret} outboundReady={ready} />
+            <HeroOutboundCTA
+              requiresCronAuth={env.cronSecret}
+              outboundReady={ready}
+              missingEnv={missingEnv}
+            />
           </div>
 
           <aside className="landing__side-card" aria-label="Snapshot">
@@ -61,9 +70,14 @@ export default async function HomePage() {
         <div className="landing__results-head">
           <h2 className="landing__results-title">Latest results</h2>
           {total > 0 && (
-            <Link href="/leads" className="landing__results-link">
-              All {total} →
-            </Link>
+            <span style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+              <Link href="/leads-sheet" className="landing__results-link">
+                Sheet →
+              </Link>
+              <Link href="/leads" className="landing__results-link">
+                All {total} →
+              </Link>
+            </span>
           )}
         </div>
 
