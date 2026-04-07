@@ -30,9 +30,9 @@ export function HeroOutboundCTA({ requiresCronAuth, outboundReady, missingEnv }:
 
   const blockReason =
     missingEnv.length > 0
-      ? `Add these in Vercel (or .env locally), then redeploy: ${missingEnv.join(", ")}.`
+      ? `Missing: ${missingEnv.join(", ")}`
       : needsCronToken
-        ? "Paste the same value as CRON_SECRET in the field below, then click Run."
+        ? "Token required"
         : null;
 
   return (
@@ -45,12 +45,12 @@ export function HeroOutboundCTA({ requiresCronAuth, outboundReady, missingEnv }:
 
       {requiresCronAuth && (
         <label className="hero-cta__label hero-cta__label--visible">
-          <span>Cron secret · must match CRON_SECRET</span>
+          <span>Cron secret</span>
           <input
             className="input hero-cta__input"
             type="password"
             autoComplete="off"
-            placeholder="Paste CRON_SECRET"
+            placeholder=""
             value={bearer}
             onChange={(e) => setBearer(e.target.value)}
           />
@@ -61,7 +61,6 @@ export function HeroOutboundCTA({ requiresCronAuth, outboundReady, missingEnv }:
         type="button"
         className="hero-cta__btn"
         disabled={loading || !canStart}
-        title={!canStart && !loading ? (blockReason ?? "Cannot run yet") : undefined}
         onClick={() => run(bearer)}
       >
         {loading ? (
@@ -82,21 +81,13 @@ export function HeroOutboundCTA({ requiresCronAuth, outboundReady, missingEnv }:
             <>
               <strong>Done</strong>
               <p>
-                <span className="hero-cta__stat" title="Rows saved to the database">
-                  {summary.stored ?? 0} saved
-                </span>
+                <span className="hero-cta__stat">{summary.stored ?? 0} saved</span>
                 {" · "}
-                <span className="hero-cta__stat" title="Emails sent via Resend">
-                  {summary.sent ?? 0} sent
-                </span>
+                <span className="hero-cta__stat">{summary.sent ?? 0} sent</span>
                 {" · "}
-                <span className="hero-cta__stat" title="Duplicates / missing id">
-                  {summary.skipped ?? 0} skipped
-                </span>
+                <span className="hero-cta__stat">{summary.skipped ?? 0} skipped</span>
                 {" · "}
-                <span className="hero-cta__stat" title="Apollo search hits">
-                  {summary.searchCount ?? 0} found
-                </span>
+                <span className="hero-cta__stat">{summary.searchCount ?? 0} found</span>
               </p>
               <div style={{ display: "flex", gap: "0.85rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
                 <a href="/leads-sheet" className="hero-cta__outcome-link">

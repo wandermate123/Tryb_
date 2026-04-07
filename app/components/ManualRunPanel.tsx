@@ -17,17 +17,9 @@ export function ManualRunPanel({ requiresCronAuth, outboundReady }: Props) {
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
         <span className="pill">Manual trigger</span>
         {!outboundReady && (
-          <span style={{ fontSize: "0.85rem", color: "var(--warning)" }}>
-            Complete environment variables before a real run.
-          </span>
+          <span style={{ fontSize: "0.85rem", color: "var(--warning)" }}>Not ready</span>
         )}
       </div>
-      <p style={{ margin: "0 0 1.25rem", color: "var(--text-muted)", fontSize: "0.95rem" }}>
-        This calls the same route as Vercel Cron (<code>GET /api/cron/outbound</code>). Each lead waits{" "}
-        <strong style={{ color: "var(--text)" }}>10 seconds</strong> before the next—runs can exceed{" "}
-        <strong style={{ color: "var(--text)" }}>3 minutes</strong> for a full batch. Only use when you
-        intentionally want to spend Apollo / Gemini / Resend credits and send real emails.
-      </p>
 
       {requiresCronAuth && (
         <label
@@ -39,27 +31,17 @@ export function ManualRunPanel({ requiresCronAuth, outboundReady }: Props) {
           }}
         >
           <span style={{ display: "block", marginBottom: "0.4rem", color: "var(--text)" }}>
-            CRON secret (Bearer token)
+            Cron secret
           </span>
           <input
             className="input"
             type="password"
             autoComplete="off"
-            placeholder="Paste the value of CRON_SECRET"
+            placeholder=""
             value={bearer}
             onChange={(e) => setBearer(e.target.value)}
           />
-          <span style={{ display: "block", marginTop: "0.35rem", fontSize: "0.8rem" }}>
-            Vercel injects this header automatically for scheduled jobs; locally you must paste it.
-          </span>
         </label>
-      )}
-
-      {!requiresCronAuth && (
-        <p style={{ fontSize: "0.85rem", color: "var(--warning)", marginBottom: "1rem" }}>
-          <strong>No CRON_SECRET</strong> is set—this endpoint is open to anyone who can reach your URL.
-          Set <code>CRON_SECRET</code> in production.
-        </p>
       )}
 
       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
