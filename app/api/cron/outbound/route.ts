@@ -26,6 +26,10 @@ type ApolloOrg = {
   primary_domain?: string | null;
   sanitized_organization_domain?: string | null;
   website_url?: string | null;
+  facebook_url?: string | null;
+  linkedin_url?: string | null;
+  twitter_url?: string | null;
+  instagram_url?: string | null;
 };
 
 type ApolloPerson = {
@@ -37,6 +41,9 @@ type ApolloPerson = {
   title?: string | null;
   email?: string | null;
   linkedin_url?: string | null;
+  facebook_url?: string | null;
+  twitter_url?: string | null;
+  instagram_url?: string | null;
   organization?: ApolloOrg | null;
   organization_name?: string | null;
 };
@@ -49,6 +56,7 @@ type ApolloEnrichmentResult = {
   industry: string | null;
   companyDomain: string | null;
   companyEmail: string | null;
+  instagramUrl: string | null;
 };
 
 const TRYB_EMAIL_SIGN_OFF = `Best,
@@ -210,7 +218,92 @@ function emptyEnrichment(): ApolloEnrichmentResult {
     industry: null,
     companyDomain: null,
     companyEmail: null,
+    instagramUrl: null,
   };
+}
+
+function firstEmailLike(obj: Record<string, unknown> | null | undefined, keys: string[]): string | null {
+  if (!obj) return null;
+  for (const key of keys) {
+    const v = obj[key];
+    if (typeof v === "string" && v.includes("@")) return v.trim();
+  }
+  return null;
+}
+
+/** Normalize Instagram URL or @handle from Apollo (field names vary by endpoint). */
+function normalizeInstagramUrl(raw: string | null | undefined): string | null {
+  const s = raw?.trim();
+  if (!s) return null;
+  if (/instagram\.com\//i.test(s)) {
+    return s.startsWith("http") ? s : `https://${s.replace(/^\/\//, "")}`;
+  }
+  const handle = s.replace(/^@/, "").replace(/^https?:\/\/(www\.)?instagram\.com\//i, "").split(/[/?#]/)[0];
+  if (handle && /^[a-z0-9._]+$/i.test(handle)) return `https://www.instagram.com/${handle}/`;
+  return null;
+}
+
+function pickInstagramUrl(person: ApolloPerson, org: ApolloOrg | null | undefined): string | null {
+  const p = person as Record<string, unknown>;
+  const o = org as Record<string, unknown> | null | undefined;
+  const keys = [
+    "instagram_url",
+    "instagram_handle",
+    "organization_instagram_url",
+    "company_instagram_url",
+    "primary_instagram_url",
+  ];
+  for (const key of keys) {
+    const v = p[key];
+    if (typeof v === "string") {
+      const n = normalizeInstagramUrl(v);
+      if (n) return n;
+    }
+  }
+  if (o) {
+    for (const key of keys) {
+      const v = o[key];
+      if (typeof v === "string") {
+        const n = normalizeInstagramUrl(v);
+        if (n) return n;
+      }
+    }
+  }
+  return null;
+}
+
+function pickCompanyEmailFromOrg(org: ApolloOrg | null | undefined): string | null {
+  if (!org) return null;
+  const raw = org as Record<string, unknown>;
+  return firstEmailLike(raw, [
+    "corporate_email",
+    "organization_headcount_email",
+    "generic_estimate_email",
+    "primary_email",
+    "email",
+    "company_email",
+    "organization_email",
+    "estimated_email",
+    "sic_email",
+  ]);
+}
+
+function pickCompanyEmailFromPerson(person: ApolloPerson | null | undefined): string | null {
+  if (!person) return null;
+  return firstEmailLike(person as Record<string, unknown>, [
+    "corporate_email",
+    "organization_email",
+    "account_email",
+    "company_email",
+  ]);
+}
+
+/** When Apollo has no corporate email but we have a domain — common outreach placeholder (verify before relying on it). */
+function inferCompanyEmailFromDomain(domain: string | null | undefined): string | null {
+  const raw = domain?.trim().toLowerCase().replace(/^www\./, "").split("/")[0] ?? "";
+  if (!raw || !raw.includes(".") || raw.length < 3) return null;
+  if (raw === "linkedin.com" || raw.endsWith("wordpress.com")) return null;
+  return `hello@${raw}`;
 }
 
 function mergePersonIntoEnrichment(
@@ -218,6 +311,7 @@ function mergePersonIntoEnrichment(
   enriched: ApolloEnrichmentResult,
 ): ApolloEnrichmentResult {
   const org = person.organization ?? null;
+  const ig = enriched.instagramUrl ?? pickInstagramUrl(person, org);
   return {
     email: enriched.email,
     linkedinUrl: enriched.linkedinUrl ?? person.linkedin_url?.trim() ?? null,
@@ -231,7 +325,11 @@ function mergePersonIntoEnrichment(
       org?.primary_domain?.trim() ??
       org?.sanitized_organization_domain?.trim() ??
       null,
-    companyEmail: enriched.companyEmail ?? pickCompanyEmailFromOrg(org),
+    companyEmail:
+      enriched.companyEmail ??
+      pickCompanyEmailFromOrg(org) ??
+      pickCompanyEmailFromPerson(person),
+    instagramUrl: ig,
   };
 }
 
@@ -280,21 +378,6 @@ async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
     }));
 }
 
-function pickCompanyEmailFromOrg(org: ApolloOrg | null | undefined): string | null {
-  if (!org) return null;
-  const raw = org as Record<string, unknown>;
-  for (const key of [
-    "corporate_email",
-    "organization_headcount_email",
-    "generic_estimate_email",
-    "primary_email",
-  ]) {
-    const v = raw[key];
-    if (typeof v === "string" && v.includes("@")) return v.trim();
-  }
-  return null;
-}
-
 async function apolloEnrichPerson(personId: string): Promise<ApolloEnrichmentResult> {
   const apiKey = getEnv("APOLLO_API_KEY");
   const q = new URLSearchParams({
@@ -333,7 +416,8 @@ async function apolloEnrichPerson(personId: string): Promise<ApolloEnrichmentRes
     companyName: org?.name?.trim() || null,
     industry: org?.industry?.trim() || null,
     companyDomain: domain,
-    companyEmail: pickCompanyEmailFromOrg(org),
+    companyEmail: pickCompanyEmailFromOrg(org) ?? pickCompanyEmailFromPerson(p ?? undefined),
+    instagramUrl: p ? pickInstagramUrl(p, org) : null,
   };
 }
 
@@ -523,6 +607,12 @@ export async function GET(request: Request) {
         const jobTitle = enriched.jobTitle || person.title?.trim() || null;
         const hasWorkEmail = Boolean(enriched.email?.trim());
 
+        let companyEmail = enriched.companyEmail?.trim() || null;
+        if (!companyEmail && enriched.companyDomain) {
+          companyEmail = inferCompanyEmailFromDomain(enriched.companyDomain);
+        }
+        const instagramUrl = enriched.instagramUrl?.trim() || null;
+
         const [leadTierVal, icpOpportunity, pitch] = await Promise.all([
           generateLeadTierSafe({ companyName, industry, nicheLabel, jobTitle }),
           generateOpportunityLineSafe({ companyName, industry, nicheLabel }),
@@ -579,9 +669,10 @@ export async function GET(request: Request) {
             industry,
             directEmail: enriched.email?.trim() ? enriched.email.trim() : null,
             jobTitle: jobTitle ?? undefined,
-            companyEmail: enriched.companyEmail ?? undefined,
+            companyEmail: companyEmail ?? undefined,
             companyDomain: enriched.companyDomain ?? undefined,
             linkedinUrl: enriched.linkedinUrl ?? undefined,
+            instagramUrl: instagramUrl ?? undefined,
             nicheSegment: nicheLabel,
             leadTier: leadTierVal,
             opportunity,
