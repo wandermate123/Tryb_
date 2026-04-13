@@ -26,6 +26,10 @@ model OutboundLead {
   companyDomain    String?
   linkedinUrl      String?
   instagramUrl     String?
+  /// ICP: Skincare & Beauty | Food & Beverage | Boutique Hospitality
+  nicheSegment     String?
+  ///1–3 per Tryb SOP (Gemini heuristic; Instagram/Ads not automated)
+  leadTier         String?
   /// Notes on opportunity / pipeline (auto-filled on create; you can edit in DB later)
   opportunity      String?  @db.Text
   aiGeneratedPitch String   @db.Text

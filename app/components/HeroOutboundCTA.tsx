@@ -97,6 +97,28 @@ export function HeroOutboundCTA({ requiresCronAuth, outboundReady, missingEnv }:
                   Cards →
                 </a>
               </div>
+              {summary.emailSendSkipped && (
+                <p className="hero-cta__blocked" style={{ marginTop: "0.75rem" }}>
+                  This deployment did not send email (skip mode is enabled in environment).
+                </p>
+              )}
+              {summary.errors && summary.errors.length > 0 && (
+                <details className="hero-cta__details" style={{ marginTop: "0.75rem" }}>
+                  <summary>Run messages ({summary.errors.length})</summary>
+                  <ul
+                    style={{
+                      margin: "0.5rem 0 0",
+                      paddingLeft: "1.25rem",
+                      fontSize: "0.88rem",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {summary.errors.slice(0, 20).map((e, i) => (
+                      <li key={i}>{e.message}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </>
           )}
           {fail && (

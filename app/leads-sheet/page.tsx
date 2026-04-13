@@ -69,6 +69,8 @@ export default async function LeadsSheetPage() {
             <thead>
               <tr>
                 <th className="sheet__th">Company</th>
+                <th className="sheet__th">Niche</th>
+                <th className="sheet__th">Tier</th>
                 <th className="sheet__th">Company email</th>
                 <th className="sheet__th">Industry</th>
                 <th className="sheet__th">LinkedIn</th>
@@ -86,7 +88,7 @@ export default async function LeadsSheetPage() {
             <tbody>
               {leads.length === 0 && (
                 <tr>
-                  <td className="sheet__cell sheet__cell--empty" colSpan={13}>
+                  <td className="sheet__cell sheet__cell--empty" colSpan={15}>
                     No rows yet.
                   </td>
                 </tr>
@@ -97,6 +99,12 @@ export default async function LeadsSheetPage() {
                 return (
                   <tr key={lead.id} className="sheet__row">
                     <Cell>{lead.companyName}</Cell>
+                    <Cell>
+                      <span className="sheet__muted">{lead.nicheSegment ?? "—"}</span>
+                    </Cell>
+                    <Cell>
+                      <span className="sheet__nowrap">{lead.leadTier ?? "—"}</span>
+                    </Cell>
                     <Cell>
                       <LinkOrDash href={lead.companyEmail} label={lead.companyEmail ?? undefined} />
                     </Cell>

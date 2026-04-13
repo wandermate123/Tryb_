@@ -1,7 +1,12 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 import { Resend } from "resend";
-import { getOutboundPaceMs, isOutboundEmailSendSkipped } from "@/lib/outbound-config";
+import {
+  getOutboundMaxContactsPerRun,
+  getOutboundPaceMs,
+  isOutboundEmailSendSkipped,
+} from "@/lib/outbound-config";
+import { NICHE_SEARCH_ORDER, type NicheDefinition } from "@/lib/outbound-niches";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -46,20 +51,50 @@ type ApolloEnrichmentResult = {
   companyEmail: string | null;
 };
 
-const DEFAULT_OPPORTUNITY =
-  "Tryb Studios outbound — digital marketing & branding intro (email sent).";
+const TRYB_EMAIL_SIGN_OFF = `Best,
+Kabir
+Tryb Studios (www.trybstudios.com)`;
 
-const OPPORTUNITY_SEND_FAILED =
-  "Tryb Studios outbound — pitch generated; email not sent (fix Resend/domain or run again).";
+function buildPitchFallback(
+  prospectFirstName: string,
+  companyName: string,
+  nicheLabel: string,
+): string {
+  return `${greetingLine(prospectFirstName)}
 
-const OPPORTUNITY_COLLECT_ONLY =
-  "Tryb Studios outbound — data + pitch saved; email skipped (OUTBOUND_SKIP_EMAIL_SEND). Enable Resend later.";
+I'm Kabir — I run a creative studio called Tryb Studios where we work on cinematic visuals and digital storytelling for brands.
 
-const OPPORTUNITY_NO_WORK_EMAIL =
-  "Tryb Studios outbound — pitch saved; Apollo did not return a work email (credits / coverage). Use LinkedIn or company email.";
+I recently came across ${companyName} while looking at ${nicheLabel.toLowerCase()} brands, and the way you show up visually made me want to reach out.
 
-const PITCH_FALLBACK =
-  "Quick note from Tryb Studios: we help consumer and hospitality brands sharpen digital presence and storytelling. If growth or creative is on your radar this quarter, happy to share how we work with teams like yours.";
+I had a couple of ideas around campaign-style product storytelling — things like motion-led hero moments, richer texture and ingredient visuals, or short product films that feel more cinematic alongside your existing content.
+
+If you're open to it, I'd be happy to share a few concepts, and if helpful we could also jump on a quick call to discuss them.
+
+${TRYB_EMAIL_SIGN_OFF}`;
+}
+
+function greetingLine(firstName: string): string {
+  const f = firstName.trim();
+  if (!f || f.toLowerCase() === "founder") return "Hi,";
+  return `Hi ${f},`;
+}
+
+/** Strip any model-provided closing so the sent email always uses the canonical Tryb sign-off. */
+function normalizeOutboundEmailBody(body: string): string {
+  const lines = body.trim().split(/\r?\n/);
+  const bestIdx = lines.findIndex((line) => /^\s*Best,/i.test(line));
+  const t =
+    bestIdx === -1 ? body.trim() : lines.slice(0, bestIdx).join("\n").trim();
+  return `${t}\n\n${TRYB_EMAIL_SIGN_OFF}`;
+}
+
+const OPPORTUNITY_FALLBACK = (niche: string) =>
+  `${niche} — product visuals, performance creative, and digital storytelling`;
+
+/** SOP: company size ~10–200; exclude 1–10 employee micro-brands from Apollo ranges. */
+const EMPLOYEE_RANGES_SOP = ["11,20", "21,50", "51,100", "101,200"] as const;
+
+type PersonWithNiche = { person: ApolloPerson; nicheLabel: string };
 
 type ApolloSearchResponse = {
   people?: ApolloPerson[];
@@ -102,18 +137,19 @@ function apolloHeaders(apiKey: string): HeadersInit {
   };
 }
 
-function buildApolloSearchQuery(): string {
+function buildApolloSearchQueryForNiche(niche: NicheDefinition): string {
   const p = new URLSearchParams();
   p.set("page", "1");
-  p.set("per_page", "25");
+  p.set("per_page", String(niche.perPage));
   const titles = [
     "CEO",
     "Founder",
     "Co-Founder",
-    "Owner",
-    "Managing Director",
-    "Director",
+    "CMO",
     "Head of Marketing",
+    "Marketing Director",
+    "Brand Manager",
+    "Managing Director",
   ];
   for (const t of titles) p.append("person_titles[]", t);
 
@@ -126,25 +162,41 @@ function buildApolloSearchQuery(): string {
   ];
   for (const loc of hqLocations) p.append("organization_locations[]", loc);
 
-  const tag = process.env.APOLLO_INDUSTRY_KEYWORD_TAG?.trim();
-  if (tag) p.append("q_organization_keyword_tags[]", tag);
+  for (const tag of niche.keywordTags) {
+    p.append("q_organization_keyword_tags[]", tag);
+  }
+  const extra = process.env.APOLLO_INDUSTRY_KEYWORD_TAG?.trim();
+  if (extra) p.append("q_organization_keyword_tags[]", extra);
 
-  for (const r of ["1,10", "11,20", "21,50", "51,100", "101,200"]) {
+  for (const r of EMPLOYEE_RANGES_SOP) {
     p.append("organization_num_employees_ranges[]", r);
   }
   return p.toString();
 }
 
-/** If the ICP query returns no rows, try a looser search so the sheet can still populate. */
+/** If niche searches return no rows, broader ICP pull (still product/hospitality skew). */
 function buildApolloSearchQueryRelaxed(): string {
   const p = new URLSearchParams();
   p.set("page", "1");
   p.set("per_page", "25");
-  for (const t of ["Founder", "CEO", "Owner", "Managing Director"]) {
+  for (const t of [
+    "Founder",
+    "CEO",
+    "Co-Founder",
+    "CMO",
+    "Head of Marketing",
+    "Brand Manager",
+  ]) {
     p.append("person_titles[]", t);
   }
-  for (const loc of ["United States", "United Kingdom", "India"]) {
-    p.append("person_locations[]", loc);
+  for (const loc of ["United States", "United Kingdom", "India", "United Arab Emirates", "Australia"]) {
+    p.append("organization_locations[]", loc);
+  }
+  for (const tag of ["beauty", "cosmetics", "food and beverage", "coffee", "boutique hotel"]) {
+    p.append("q_organization_keyword_tags[]", tag);
+  }
+  for (const r of EMPLOYEE_RANGES_SOP) {
+    p.append("organization_num_employees_ranges[]", r);
   }
   return p.toString();
 }
@@ -183,8 +235,9 @@ function mergePersonIntoEnrichment(
   };
 }
 
-async function apolloSearchPeople(): Promise<ApolloPerson[]> {
+async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
   const apiKey = getEnv("APOLLO_API_KEY");
+  const max = getOutboundMaxContactsPerRun();
 
   async function runQuery(query: string, label: string): Promise<ApolloPerson[]> {
     const url = `${APOLLO_API_BASE}${APOLLO_SEARCH_PATH}?${query}`;
@@ -200,10 +253,31 @@ async function apolloSearchPeople(): Promise<ApolloPerson[]> {
     return data.people ?? data.contacts ?? [];
   }
 
-  const primary = await runQuery(buildApolloSearchQuery(), "primary");
-  if (primary.length > 0) return primary;
+  const merged: PersonWithNiche[] = [];
+  const seen = new Set<string>();
 
-  return runQuery(buildApolloSearchQueryRelaxed(), "relaxed");
+  for (const niche of NICHE_SEARCH_ORDER) {
+    const people = await runQuery(buildApolloSearchQueryForNiche(niche), niche.key);
+    for (const person of people) {
+      const id = person.id;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      merged.push({ person, nicheLabel: niche.label });
+    }
+  }
+
+  if (merged.length > 0) {
+    return merged.slice(0, max);
+  }
+
+  const relaxed = await runQuery(buildApolloSearchQueryRelaxed(), "relaxed");
+  return relaxed
+    .filter((p) => p.id)
+    .slice(0, max)
+    .map((person) => ({
+      person,
+      nicheLabel: "Mixed ICP (relaxed)",
+    }));
 }
 
 function pickCompanyEmailFromOrg(org: ApolloOrg | null | undefined): string | null {
@@ -264,43 +338,111 @@ async function apolloEnrichPerson(personId: string): Promise<ApolloEnrichmentRes
 }
 
 async function generatePitch(params: {
-  prospectName: string;
+  prospectFirstName: string;
   companyName: string;
   industry: string;
+  nicheLabel: string;
 }): Promise<string> {
   const apiKey = getEnv("GEMINI_API_KEY");
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-  const prompt = `You are the Founder of Tryb Studios, a digital marketing and branding agency.
+  const open = greetingLine(params.prospectFirstName);
 
-Write exactly 3 sentences as the body of a cold email to this prospect:
-- Prospect name: ${params.prospectName}
-- Company: ${params.companyName}
-- Industry: ${params.industry}
+  const prompt = `You are Kabir, founder of Tryb Studios (creative studio: cinematic visuals, digital storytelling, product and campaign content for brands).
 
-Pitch Tryb Studios' digital marketing and branding services in a way that feels specific to them (reference their company or industry naturally once).
+Write the FULL plain-text body of a short cold email — same voice and structure as these real examples:
+- Start warm and specific: show you understand ${params.companyName} (or their category); praise something concrete you can infer from "${params.industry}" / "${params.nicheLabel}" — not generic flattery.
+- Lead with THEM and visual/creative ideas; Tryb appears as a brief, natural aside (one short sentence), not a pitch deck.
+- Offer specific creative directions that fit the segment (e.g. for beauty: ingredient micro-visualizations, cinematic product rituals, lab-to-texture storytelling, barrier/science motion; for F&B: stylised pack shots, surreal/3D product worlds, motion-led social; for hospitality: immersive digital launch moments, richer booking-site storytelling). Pick what fits ${params.companyName}.
+- Tone: conversational, professional, confident, never salesy. Sounds like a thoughtful peer, not marketing jargon. Avoid: synergy, leverage, best-in-class, circle back, touch base, solutions, cutting-edge, game-changer, hustle.
+- Short paragraphs only (1–2 sentences each), separated by a blank line. No bullet points. No numbered lists. No subject line.
+- Optional: one low-pressure CTA — happy to share a couple of visual concepts, or sketch ideas, or a quick call *if helpful* (mirrors Kabir's real outreach).
+- Do NOT invent that you use their products unless it's plausible from context; you may say you have been following the brand or came across them recently.
 
-Rules:
-- Casual, direct tone; zero corporate jargon (no "synergy", "leverage", "best-in-class", "circle back", etc.).
-- No subject line, no sign-off, no placeholder text — only the 3 sentences of the email body.
-- No bullet points. Plain prose only.`;
+Exact first line of the email must be: ${open}
+
+Do NOT include a sign-off, name, or website — the app adds that. End on the last paragraph before "Best,".`;
 
   const result = await model.generateContent(prompt);
   const text = result.response.text().trim();
   if (!text) throw new Error("Gemini returned empty pitch");
-  return text;
+  return normalizeOutboundEmailBody(text);
 }
 
 async function generatePitchSafe(params: {
-  prospectName: string;
+  prospectFirstName: string;
   companyName: string;
   industry: string;
+  nicheLabel: string;
 }): Promise<string> {
   try {
     return await generatePitch(params);
   } catch {
-    return PITCH_FALLBACK;
+    return buildPitchFallback(params.prospectFirstName, params.companyName, params.nicheLabel);
+  }
+}
+
+async function generateOpportunityLine(params: {
+  companyName: string;
+  industry: string;
+  nicheLabel: string;
+}): Promise<string> {
+  const apiKey = getEnv("GEMINI_API_KEY");
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const prompt = `Tryb Studios helps D2C product brands and boutique hotels with product creative, performance ads, and digital storytelling.
+
+For this lead, output ONE short opportunity phrase (max 12 words) — like "cinematic product ads" or "booking-site visual refresh". Noun phrase only; no quotes; no "we"; no colon.
+
+Company: ${params.companyName}
+Industry: ${params.industry}
+Segment: ${params.nicheLabel}`;
+  const result = await model.generateContent(prompt);
+  const text = result.response.text().trim().replace(/^["']|["']$/g, "").replace(/\n/g, " ");
+  if (!text) throw new Error("Gemini returned empty opportunity");
+  return text.slice(0, 220);
+}
+
+async function generateOpportunityLineSafe(params: {
+  companyName: string;
+  industry: string;
+  nicheLabel: string;
+}): Promise<string> {
+  try {
+    return await generateOpportunityLine(params);
+  } catch {
+    return OPPORTUNITY_FALLBACK(params.nicheLabel);
+  }
+}
+
+async function generateLeadTierSafe(params: {
+  companyName: string;
+  industry: string;
+  nicheLabel: string;
+  jobTitle: string | null;
+}): Promise<string> {
+  try {
+    const apiKey = getEnv("GEMINI_API_KEY");
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const prompt = `You cannot see Instagram followers or Meta Ad Library. Guess lead tier for a creative studio selling product visuals and performance creative.
+
+1 = strongest (premium D2C/hospitality signals, likely spends on marketing, senior title)
+2 = solid professional brand
+3 = smaller or generic
+
+Company: ${params.companyName}
+Industry: ${params.industry}
+Segment: ${params.nicheLabel}
+Title: ${params.jobTitle ?? "unknown"}
+
+Reply with exactly one digit: 1, 2, or 3.`;
+    const text = (await model.generateContent(prompt)).response.text().trim();
+    const m = text.match(/[123]/);
+    return m ? m[0]! : "2";
+  } catch {
+    return "2";
   }
 }
 
@@ -348,7 +490,7 @@ export async function GET(request: Request) {
     for (let i = 0; i < people.length; i++) {
       if (i > 0 && paceMs > 0) await sleep(paceMs);
 
-      const person = people[i];
+      const { person, nicheLabel } = people[i];
       const personId = person.id;
 
       try {
@@ -378,15 +520,14 @@ export async function GET(request: Request) {
         const { firstName, lastName } = parseFullName(person);
         const companyName = enriched.companyName || companyFromPerson(person);
         const industry = enriched.industry || industryFromPerson(person);
-        const prospectName = [firstName, lastName].filter(Boolean).join(" ").trim() || firstName;
         const jobTitle = enriched.jobTitle || person.title?.trim() || null;
         const hasWorkEmail = Boolean(enriched.email?.trim());
 
-        const pitch = await generatePitchSafe({
-          prospectName,
-          companyName,
-          industry,
-        });
+        const [leadTierVal, icpOpportunity, pitch] = await Promise.all([
+          generateLeadTierSafe({ companyName, industry, nicheLabel, jobTitle }),
+          generateOpportunityLineSafe({ companyName, industry, nicheLabel }),
+          generatePitchSafe({ prospectFirstName: firstName, companyName, industry, nicheLabel }),
+        ]);
 
         let emailSent = false;
         let sendError: string | null = null;
@@ -395,7 +536,7 @@ export async function GET(request: Request) {
           const resendApiKey = getEnv("RESEND_API_KEY");
           const from = getEnv("RESEND_FROM");
           const resend = new Resend(resendApiKey);
-          const subject = `Quick question about ${companyName}'s digital presence`;
+          const subject = `A quick note — ${companyName}`;
           try {
             const sendResult = await resend.emails.send({
               from,
@@ -414,12 +555,12 @@ export async function GET(request: Request) {
         }
 
         const opportunity = emailSendSkipped
-          ? OPPORTUNITY_COLLECT_ONLY
+          ? `${icpOpportunity} (send skipped)`
           : emailSent
-            ? DEFAULT_OPPORTUNITY
+            ? icpOpportunity
             : !hasWorkEmail
-              ? OPPORTUNITY_NO_WORK_EMAIL
-              : OPPORTUNITY_SEND_FAILED;
+              ? `${icpOpportunity} (no work email from Apollo — use LinkedIn or company email)`
+              : `${icpOpportunity} (Resend send failed — check domain & RESEND_FROM)`;
 
         const status = emailSendSkipped
           ? "PendingSend"
@@ -441,6 +582,8 @@ export async function GET(request: Request) {
             companyEmail: enriched.companyEmail ?? undefined,
             companyDomain: enriched.companyDomain ?? undefined,
             linkedinUrl: enriched.linkedinUrl ?? undefined,
+            nicheSegment: nicheLabel,
+            leadTier: leadTierVal,
             opportunity,
             aiGeneratedPitch: pitch,
             status,
