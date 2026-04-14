@@ -537,6 +537,28 @@ function verifyCronAuth(request: Request): boolean {
   return auth === `Bearer ${secret}`;
 }
 
+function formatResendFailure(
+  sendResult: { data: { id?: string } | null; error: { message?: string; name?: string } | null },
+): string {
+  const err = sendResult.error;
+  if (!err) return "Resend returned no data and no error";
+  const name = err.name ? String(err.name) : "error";
+  const msg = err.message ? String(err.message) : "unknown";
+  return `${name}: ${msg}`;
+}
+
+function isResendSendSuccess(sendResult: {
+  data: { id?: string } | null;
+  error: unknown;
+}): boolean {
+  if (sendResult.error) return false;
+  const id =
+    sendResult.data && typeof sendResult.data === "object" && "id" in sendResult.data
+      ? (sendResult.data as { id?: string }).id
+      : null;
+  return Boolean(id && String(id).trim().length > 0);
+}
+
 export async function POST(request: Request) {
   return GET(request);
 }
@@ -623,21 +645,24 @@ export async function GET(request: Request) {
         let sendError: string | null = null;
 
         if (!emailSendSkipped && hasWorkEmail) {
-          const resendApiKey = getEnv("RESEND_API_KEY");
-          const from = getEnv("RESEND_FROM");
+          const resendApiKey = getEnv("RESEND_API_KEY").trim();
+          const from = getEnv("RESEND_FROM").trim();
+          const to = enriched.email!.trim();
           const resend = new Resend(resendApiKey);
           const subject = `A quick note — ${companyName}`;
           try {
             const sendResult = await resend.emails.send({
               from,
-              to: enriched.email!,
+              to,
               subject,
               text: pitch,
             });
-            if (sendResult.error) {
-              sendError = sendResult.error.message ?? "Resend returned an error";
-            } else {
+            if (isResendSendSuccess(sendResult)) {
               emailSent = true;
+            } else {
+              sendError = formatResendFailure(
+                sendResult as { data: { id?: string } | null; error: { message?: string; name?: string } | null },
+              );
             }
           } catch (err) {
             sendError = err instanceof Error ? err.message : String(err);
