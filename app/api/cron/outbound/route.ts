@@ -336,16 +336,23 @@ function mergePersonIntoEnrichment(
 async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
   const apiKey = getEnv("APOLLO_API_KEY");
   const max = getOutboundMaxContactsPerRun();
+  const maxPagesPerNicheRaw = process.env.APOLLO_MAX_PAGES_PER_NICHE?.trim();
+  const maxPagesPerNiche =
+    maxPagesPerNicheRaw && !Number.isNaN(Number(maxPagesPerNicheRaw))
+      ? Math.max(1, Math.floor(Number(maxPagesPerNicheRaw)))
+      : 4;
 
-  async function runQuery(query: string, label: string): Promise<ApolloPerson[]> {
-    const url = `${APOLLO_API_BASE}${APOLLO_SEARCH_PATH}?${query}`;
+  async function runQuery(query: string, label: string, page: number): Promise<ApolloPerson[]> {
+    const params = new URLSearchParams(query);
+    params.set("page", String(page));
+    const url = `${APOLLO_API_BASE}${APOLLO_SEARCH_PATH}?${params.toString()}`;
     const res = await fetch(url, {
       method: "POST",
       headers: apolloHeaders(apiKey),
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      throw new Error(`Apollo search failed (${label}): ${res.status} ${errText}`);
+      throw new Error(`Apollo search failed (${label}, page ${page}): ${res.status} ${errText}`);
     }
     const data = (await res.json()) as ApolloSearchResponse;
     return data.people ?? data.contacts ?? [];
@@ -355,12 +362,16 @@ async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
   const seen = new Set<string>();
 
   for (const niche of NICHE_SEARCH_ORDER) {
-    const people = await runQuery(buildApolloSearchQueryForNiche(niche), niche.key);
-    for (const person of people) {
-      const id = person.id;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      merged.push({ person, nicheLabel: niche.label });
+    for (let page = 1; page <= maxPagesPerNiche && merged.length < max; page++) {
+      const people = await runQuery(buildApolloSearchQueryForNiche(niche), niche.key, page);
+      if (people.length === 0) break;
+      for (const person of people) {
+        const id = person.id;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        merged.push({ person, nicheLabel: niche.label });
+        if (merged.length >= max) break;
+      }
     }
   }
 
@@ -368,14 +379,19 @@ async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
     return merged.slice(0, max);
   }
 
-  const relaxed = await runQuery(buildApolloSearchQueryRelaxed(), "relaxed");
-  return relaxed
-    .filter((p) => p.id)
-    .slice(0, max)
-    .map((person) => ({
-      person,
-      nicheLabel: "Mixed ICP (relaxed)",
-    }));
+  const relaxedMerged: PersonWithNiche[] = [];
+  for (let page = 1; page <= maxPagesPerNiche && relaxedMerged.length < max; page++) {
+    const relaxed = await runQuery(buildApolloSearchQueryRelaxed(), "relaxed", page);
+    if (relaxed.length === 0) break;
+    for (const person of relaxed) {
+      const id = person.id;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      relaxedMerged.push({ person, nicheLabel: "Mixed ICP (relaxed)" });
+      if (relaxedMerged.length >= max) break;
+    }
+  }
+  return relaxedMerged;
 }
 
 async function apolloEnrichPerson(personId: string): Promise<ApolloEnrichmentResult> {
@@ -568,8 +584,10 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const emailSendSkipped = isOutboundEmailSendSkipped();
-  const paceMs = getOutboundPaceMs();
+  const maxContactsPerRun = getOutboundMaxContactsPerRun();
+  const highVolumeCollectMode = maxContactsPerRun >= 50;
+  const emailSendSkipped = isOutboundEmailSendSkipped() || highVolumeCollectMode;
+  const paceMs = getOutboundPaceMs(emailSendSkipped);
 
   const summary: {
     startedAt: string;
@@ -635,11 +653,17 @@ export async function GET(request: Request) {
         }
         const instagramUrl = enriched.instagramUrl?.trim() || null;
 
-        const [leadTierVal, icpOpportunity, pitch] = await Promise.all([
-          generateLeadTierSafe({ companyName, industry, nicheLabel, jobTitle }),
-          generateOpportunityLineSafe({ companyName, industry, nicheLabel }),
-          generatePitchSafe({ prospectFirstName: firstName, companyName, industry, nicheLabel }),
-        ]);
+        const [leadTierVal, icpOpportunity, pitch] = highVolumeCollectMode
+          ? ([
+              "2",
+              OPPORTUNITY_FALLBACK(nicheLabel),
+              buildPitchFallback(firstName, companyName, nicheLabel),
+            ] as const)
+          : await Promise.all([
+              generateLeadTierSafe({ companyName, industry, nicheLabel, jobTitle }),
+              generateOpportunityLineSafe({ companyName, industry, nicheLabel }),
+              generatePitchSafe({ prospectFirstName: firstName, companyName, industry, nicheLabel }),
+            ]);
 
         let emailSent = false;
         let sendError: string | null = null;

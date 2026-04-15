@@ -5,12 +5,12 @@ export function isOutboundEmailSendSkipped(): boolean {
 }
 
 /** Delay between Apollo enrich calls (ms). Default: 2s collect-only, 10s when sending mail. */
-export function getOutboundPaceMs(): number {
+export function getOutboundPaceMs(emailSendSkipped = isOutboundEmailSendSkipped()): number {
   const raw = process.env.OUTBOUND_PACE_MS?.trim();
   if (raw !== undefined && raw !== "" && !Number.isNaN(Number(raw))) {
     return Math.max(0, Math.floor(Number(raw)));
   }
-  return isOutboundEmailSendSkipped() ? 2000 : 10_000;
+  return emailSendSkipped ? 2000 : 10_000;
 }
 
 /**
@@ -20,7 +20,7 @@ export function getOutboundPaceMs(): number {
 export function getOutboundMaxContactsPerRun(): number {
   const raw = process.env.OUTBOUND_MAX_CONTACTS_PER_RUN?.trim();
   if (raw !== undefined && raw !== "" && !Number.isNaN(Number(raw))) {
-    return Math.max(1, Math.min(75, Math.floor(Number(raw))));
+    return Math.max(50, Math.min(150, Math.floor(Number(raw))));
   }
-  return 15;
+  return 50;
 }
