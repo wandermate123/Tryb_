@@ -358,6 +358,27 @@ async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
     return data.people ?? data.contacts ?? [];
   }
 
+  async function filterExistingPeople(people: ApolloPerson[]): Promise<ApolloPerson[]> {
+    const ids = Array.from(
+      new Set(
+        people
+          .map((p) => p.id?.trim())
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+    if (ids.length === 0) return [];
+
+    const existing = await prisma.outboundLead.findMany({
+      where: { apolloPersonId: { in: ids } },
+      select: { apolloPersonId: true },
+    });
+    const existingSet = new Set(existing.map((row) => row.apolloPersonId));
+    return people.filter((p) => {
+      const id = p.id?.trim();
+      return Boolean(id) && !existingSet.has(id!);
+    });
+  }
+
   const merged: PersonWithNiche[] = [];
   const seen = new Set<string>();
 
@@ -365,7 +386,8 @@ async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
     for (let page = 1; page <= maxPagesPerNiche && merged.length < max; page++) {
       const people = await runQuery(buildApolloSearchQueryForNiche(niche), niche.key, page);
       if (people.length === 0) break;
-      for (const person of people) {
+      const freshPeople = await filterExistingPeople(people);
+      for (const person of freshPeople) {
         const id = person.id;
         if (!id || seen.has(id)) continue;
         seen.add(id);
@@ -383,7 +405,8 @@ async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
   for (let page = 1; page <= maxPagesPerNiche && relaxedMerged.length < max; page++) {
     const relaxed = await runQuery(buildApolloSearchQueryRelaxed(), "relaxed", page);
     if (relaxed.length === 0) break;
-    for (const person of relaxed) {
+    const freshRelaxed = await filterExistingPeople(relaxed);
+    for (const person of freshRelaxed) {
       const id = person.id;
       if (!id || seen.has(id)) continue;
       seen.add(id);
@@ -619,16 +642,7 @@ export async function GET(request: Request) {
 
       try {
         if (!personId) {
-          summary.skipped += 1;
           summary.errors.push({ message: "Skipping row with no Apollo person id" });
-          continue;
-        }
-
-        const existing = await prisma.outboundLead.findUnique({
-          where: { apolloPersonId: personId },
-        });
-        if (existing) {
-          summary.skipped += 1;
           continue;
         }
 
