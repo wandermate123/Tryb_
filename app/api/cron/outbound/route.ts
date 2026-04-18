@@ -340,7 +340,12 @@ async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
   const maxPagesPerNiche =
     maxPagesPerNicheRaw && !Number.isNaN(Number(maxPagesPerNicheRaw))
       ? Math.max(1, Math.floor(Number(maxPagesPerNicheRaw)))
-      : 4;
+      : 15;
+  const maxPagesRelaxedRaw = process.env.APOLLO_MAX_PAGES_RELAXED?.trim();
+  const maxPagesRelaxed =
+    maxPagesRelaxedRaw && !Number.isNaN(Number(maxPagesRelaxedRaw))
+      ? Math.max(1, Math.floor(Number(maxPagesRelaxedRaw)))
+      : Math.max(maxPagesPerNiche, 25);
 
   async function runQuery(query: string, label: string, page: number): Promise<ApolloPerson[]> {
     const params = new URLSearchParams(query);
@@ -397,24 +402,25 @@ async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
     }
   }
 
-  if (merged.length > 0) {
-    return merged.slice(0, max);
-  }
-
-  const relaxedMerged: PersonWithNiche[] = [];
-  for (let page = 1; page <= maxPagesPerNiche && relaxedMerged.length < max; page++) {
-    const relaxed = await runQuery(buildApolloSearchQueryRelaxed(), "relaxed", page);
-    if (relaxed.length === 0) break;
-    const freshRelaxed = await filterExistingPeople(relaxed);
-    for (const person of freshRelaxed) {
-      const id = person.id;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      relaxedMerged.push({ person, nicheLabel: "Mixed ICP (relaxed)" });
-      if (relaxedMerged.length >= max) break;
+  // Backfill toward `max` with the relaxed query whenever we're short — not only when
+  // niches return zero rows. Otherwise a single fresh niche hit prevents relaxed search
+  // and the run stores ~1 lead while OUTBOUND_MAX_CONTACTS_PER_RUN is 50.
+  if (merged.length < max) {
+    for (let page = 1; page <= maxPagesRelaxed && merged.length < max; page++) {
+      const relaxed = await runQuery(buildApolloSearchQueryRelaxed(), "relaxed", page);
+      if (relaxed.length === 0) break;
+      const freshRelaxed = await filterExistingPeople(relaxed);
+      for (const person of freshRelaxed) {
+        const id = person.id;
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        merged.push({ person, nicheLabel: "Mixed ICP (relaxed)" });
+        if (merged.length >= max) break;
+      }
     }
   }
-  return relaxedMerged;
+
+  return merged.slice(0, max);
 }
 
 async function apolloEnrichPerson(personId: string): Promise<ApolloEnrichmentResult> {
