@@ -123,6 +123,15 @@ function isExplicitTrueEnv(name: string): boolean {
   return v === "true" || v === "1" || v === "yes";
 }
 
+function getOutboundRunBudgetMs(): number {
+  const raw = process.env.OUTBOUND_RUN_BUDGET_MS?.trim();
+  if (raw !== undefined && raw !== "" && !Number.isNaN(Number(raw))) {
+    return Math.max(30_000, Math.floor(Number(raw)));
+  }
+  // Keep a safety buffer under the 300s platform limit.
+  return 260_000;
+}
+
 function parseFullName(person: ApolloPerson): { firstName: string; lastName: string } {
   const fn = (person.first_name ?? "").trim();
   const ln = (person.last_name ?? "").trim() || (person.last_name_obfuscated ?? "").trim();
@@ -777,6 +786,10 @@ export async function GET(request: Request) {
   const highVolumeCollectMode = isExplicitTrueEnv("OUTBOUND_HIGH_VOLUME_COLLECT_ONLY");
   const emailSendSkipped = isOutboundEmailSendSkipped() || highVolumeCollectMode;
   const paceMs = getOutboundPaceMs(emailSendSkipped);
+  const runStartedAtMs = Date.now();
+  const runBudgetMs = getOutboundRunBudgetMs();
+  const runDeadlineMs = runStartedAtMs + runBudgetMs;
+  const isNearDeadline = () => Date.now() >= runDeadlineMs;
 
   const summary: {
     startedAt: string;
@@ -785,6 +798,7 @@ export async function GET(request: Request) {
     stored: number;
     sent: number;
     skipped: number;
+    timedOut: boolean;
     errors: { personId?: string; message: string }[];
   } = {
     startedAt: new Date().toISOString(),
@@ -793,6 +807,7 @@ export async function GET(request: Request) {
     stored: 0,
     sent: 0,
     skipped: 0,
+    timedOut: false,
     errors: [],
   };
 
@@ -801,7 +816,23 @@ export async function GET(request: Request) {
     summary.searchCount = people.length;
 
     for (let i = 0; i < people.length; i++) {
+      if (isNearDeadline()) {
+        summary.timedOut = true;
+        summary.skipped += Math.max(0, people.length - i);
+        summary.errors.push({
+          message: `Stopped early to avoid runtime timeout (budget ${runBudgetMs}ms).`,
+        });
+        break;
+      }
       if (i > 0 && paceMs > 0) await sleep(paceMs);
+      if (isNearDeadline()) {
+        summary.timedOut = true;
+        summary.skipped += Math.max(0, people.length - i);
+        summary.errors.push({
+          message: `Stopped after pacing delay to avoid runtime timeout (budget ${runBudgetMs}ms).`,
+        });
+        break;
+      }
 
       const { person, nicheLabel } = people[i];
       const personId = person.id;
