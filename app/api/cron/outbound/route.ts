@@ -26,6 +26,8 @@ type ApolloOrg = {
   primary_domain?: string | null;
   sanitized_organization_domain?: string | null;
   website_url?: string | null;
+  seo_description?: string | null;
+  short_description?: string | null;
   facebook_url?: string | null;
   linkedin_url?: string | null;
   twitter_url?: string | null;
@@ -114,6 +116,11 @@ function getEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required environment variable: ${name}`);
   return v;
+}
+
+function isExplicitTrueEnv(name: string): boolean {
+  const v = process.env[name]?.trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes";
 }
 
 function parseFullName(person: ApolloPerson): { firstName: string; lastName: string } {
@@ -333,6 +340,152 @@ function mergePersonIntoEnrichment(
   };
 }
 
+function normalizeWebsiteUrl(raw: string | null | undefined): string | null {
+  const s = raw?.trim();
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}/i.test(s)) return `https://${s}`;
+  return null;
+}
+
+function candidateWebsiteUrls(person: ApolloPerson, domain: string | null | undefined): string[] {
+  const out: string[] = [];
+  const direct = normalizeWebsiteUrl(person.organization?.website_url);
+  if (direct) out.push(direct);
+
+  const d = domain?.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+  if (d && d.includes(".")) {
+    out.push(`https://${d}`, `https://www.${d}`);
+  }
+  return Array.from(new Set(out));
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ")
+    .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTagContents(html: string, tag: string, limit: number): string[] {
+  const re = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
+  const out: string[] = [];
+  let m: RegExpExecArray | null = null;
+  while ((m = re.exec(html)) !== null && out.length < limit) {
+    const text = stripHtml(m[1] ?? "");
+    if (text && text.length >= 12) out.push(text.slice(0, 220));
+  }
+  return out;
+}
+
+function extractMetaDescription(html: string): string | null {
+  const m =
+    html.match(/<meta\s+name=["']description["']\s+content=["']([^"']+)["']/i) ??
+    html.match(/<meta\s+content=["']([^"']+)["']\s+name=["']description["']/i);
+  return m?.[1]?.trim() || null;
+}
+
+function compactSentenceList(lines: string[], maxItems: number): string[] {
+  const out: string[] = [];
+  for (const raw of lines) {
+    const t = raw.replace(/\s+/g, " ").trim();
+    if (!t || t.length < 18) continue;
+    if (out.some((x) => x.toLowerCase() === t.toLowerCase())) continue;
+    out.push(t.slice(0, 220));
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+async function fetchWebsiteResearch(person: ApolloPerson, domain: string | null): Promise<string[]> {
+  const timeoutMsRaw = process.env.OUTBOUND_RESEARCH_TIMEOUT_MS?.trim();
+  const timeoutMs =
+    timeoutMsRaw && !Number.isNaN(Number(timeoutMsRaw))
+      ? Math.max(1500, Math.floor(Number(timeoutMsRaw)))
+      : 5000;
+  const urls = candidateWebsiteUrls(person, domain);
+  for (const url of urls) {
+    try {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), timeoutMs);
+      const res = await fetch(url, {
+        method: "GET",
+        signal: ac.signal,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (compatible; TrybOutboundBot/1.0; +https://www.trybstudios.com)",
+          Accept: "text/html,application/xhtml+xml",
+        },
+        cache: "no-store",
+      }).finally(() => clearTimeout(timer));
+      if (!res.ok) continue;
+
+      const ct = res.headers.get("content-type") ?? "";
+      if (!ct.includes("text/html")) continue;
+      const html = await res.text();
+      const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+      const metaDesc = extractMetaDescription(html);
+      const h1s = extractTagContents(html, "h1", 2);
+      const h2s = extractTagContents(html, "h2", 3);
+      const body = stripHtml(html).split(/(?<=[.!?])\s+/).slice(0, 40);
+
+      return compactSentenceList(
+        [
+          title ? `Website title: ${stripHtml(title)}` : "",
+          metaDesc ? `Meta: ${metaDesc}` : "",
+          ...h1s.map((x) => `H1: ${x}`),
+          ...h2s.map((x) => `H2: ${x}`),
+          ...body,
+        ],
+        8,
+      );
+    } catch {
+      continue;
+    }
+  }
+  return [];
+}
+
+async function buildResearchContext(params: {
+  person: ApolloPerson;
+  companyName: string;
+  industry: string;
+  nicheLabel: string;
+  jobTitle: string | null;
+  companyDomain: string | null;
+  linkedinUrl: string | null;
+  instagramUrl: string | null;
+}): Promise<string> {
+  const notes: string[] = [];
+  notes.push(`Company: ${params.companyName}`);
+  notes.push(`Industry: ${params.industry}`);
+  notes.push(`Niche: ${params.nicheLabel}`);
+  if (params.jobTitle) notes.push(`Prospect role: ${params.jobTitle}`);
+  if (params.linkedinUrl) notes.push(`Prospect LinkedIn: ${params.linkedinUrl}`);
+  if (params.companyDomain) notes.push(`Company domain: ${params.companyDomain}`);
+  if (params.instagramUrl) notes.push(`Instagram: ${params.instagramUrl}`);
+  if (params.person.organization?.linkedin_url?.trim()) {
+    notes.push(`Company LinkedIn: ${params.person.organization.linkedin_url.trim()}`);
+  }
+  if (params.person.organization?.short_description?.trim()) {
+    notes.push(`Org description: ${params.person.organization.short_description.trim()}`);
+  }
+  if (params.person.organization?.seo_description?.trim()) {
+    notes.push(`Org SEO description: ${params.person.organization.seo_description.trim()}`);
+  }
+
+  const websiteNotes = await fetchWebsiteResearch(params.person, params.companyDomain);
+  if (websiteNotes.length > 0) {
+    notes.push("Website observations:");
+    for (const line of websiteNotes) notes.push(`- ${line}`);
+  }
+  return notes.join("\n").slice(0, 5000);
+}
+
 async function apolloSearchPeople(): Promise<PersonWithNiche[]> {
   const apiKey = getEnv("APOLLO_API_KEY");
   const max = getOutboundMaxContactsPerRun();
@@ -471,6 +624,7 @@ async function generatePitch(params: {
   companyName: string;
   industry: string;
   nicheLabel: string;
+  researchContext: string;
 }): Promise<string> {
   const apiKey = getEnv("GEMINI_API_KEY");
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -481,15 +635,20 @@ async function generatePitch(params: {
   const prompt = `You are Kabir, founder of Tryb Studios (creative studio: cinematic visuals, digital storytelling, product and campaign content for brands).
 
 Write the FULL plain-text body of a short cold email — same voice and structure as these real examples:
-- Start warm and specific: show you understand ${params.companyName} (or their category); praise something concrete you can infer from "${params.industry}" / "${params.nicheLabel}" — not generic flattery.
+- Start warm and specific: show you understand ${params.companyName}; use concrete observations from research notes — not generic flattery.
 - Lead with THEM and visual/creative ideas; Tryb appears as a brief, natural aside (one short sentence), not a pitch deck.
 - Offer specific creative directions that fit the segment (e.g. for beauty: ingredient micro-visualizations, cinematic product rituals, lab-to-texture storytelling, barrier/science motion; for F&B: stylised pack shots, surreal/3D product worlds, motion-led social; for hospitality: immersive digital launch moments, richer booking-site storytelling). Pick what fits ${params.companyName}.
 - Tone: conversational, professional, confident, never salesy. Sounds like a thoughtful peer, not marketing jargon. Avoid: synergy, leverage, best-in-class, circle back, touch base, solutions, cutting-edge, game-changer, hustle.
 - Short paragraphs only (1–2 sentences each), separated by a blank line. No bullet points. No numbered lists. No subject line.
 - Optional: one low-pressure CTA — happy to share a couple of visual concepts, or sketch ideas, or a quick call *if helpful* (mirrors Kabir's real outreach).
 - Do NOT invent that you use their products unless it's plausible from context; you may say you have been following the brand or came across them recently.
+- Must include at least TWO specific details from the research notes.
+- If research notes are sparse, acknowledge one known detail (industry/role/domain) and avoid fabricated claims.
 
 Exact first line of the email must be: ${open}
+
+Research notes:
+${params.researchContext}
 
 Do NOT include a sign-off, name, or website — the app adds that. End on the last paragraph before "Best,".`;
 
@@ -504,6 +663,7 @@ async function generatePitchSafe(params: {
   companyName: string;
   industry: string;
   nicheLabel: string;
+  researchContext: string;
 }): Promise<string> {
   try {
     return await generatePitch(params);
@@ -614,7 +774,7 @@ export async function GET(request: Request) {
   }
 
   const maxContactsPerRun = getOutboundMaxContactsPerRun();
-  const highVolumeCollectMode = maxContactsPerRun >= 50;
+  const highVolumeCollectMode = isExplicitTrueEnv("OUTBOUND_HIGH_VOLUME_COLLECT_ONLY");
   const emailSendSkipped = isOutboundEmailSendSkipped() || highVolumeCollectMode;
   const paceMs = getOutboundPaceMs(emailSendSkipped);
 
@@ -672,6 +832,18 @@ export async function GET(request: Request) {
           companyEmail = inferCompanyEmailFromDomain(enriched.companyDomain);
         }
         const instagramUrl = enriched.instagramUrl?.trim() || null;
+        const researchContext = highVolumeCollectMode
+          ? ""
+          : await buildResearchContext({
+              person,
+              companyName,
+              industry,
+              nicheLabel,
+              jobTitle,
+              companyDomain: enriched.companyDomain,
+              linkedinUrl: enriched.linkedinUrl,
+              instagramUrl,
+            });
 
         const [leadTierVal, icpOpportunity, pitch] = highVolumeCollectMode
           ? ([
@@ -682,7 +854,13 @@ export async function GET(request: Request) {
           : await Promise.all([
               generateLeadTierSafe({ companyName, industry, nicheLabel, jobTitle }),
               generateOpportunityLineSafe({ companyName, industry, nicheLabel }),
-              generatePitchSafe({ prospectFirstName: firstName, companyName, industry, nicheLabel }),
+              generatePitchSafe({
+                prospectFirstName: firstName,
+                companyName,
+                industry,
+                nicheLabel,
+                researchContext,
+              }),
             ]);
 
         let emailSent = false;
