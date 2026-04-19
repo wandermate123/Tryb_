@@ -34,8 +34,29 @@ model OutboundLead {
   opportunity      String?  @db.Text
   aiGeneratedPitch String   @db.Text
   status           String   @default("Sent")
+  repliedAt        DateTime?
+  lastReplySnippet String?  @db.Text
+  replyCount       Int      @default(0)
   createdAt        DateTime @default(now())
+  replies          InboundReply[]
 
   @@index([createdAt])
   @@index([companyName])
+}
+
+model InboundReply {
+  id             String       @id @default(cuid())
+  outboundLeadId String?
+  outboundLead   OutboundLead? @relation(fields: [outboundLeadId], references: [id], onDelete: SetNull)
+  fromEmail      String
+  toEmail        String?
+  subject        String?
+  textBody       String?      @db.Text
+  htmlBody       String?      @db.Text
+  messageId      String?
+  rawPayload     Json?
+  receivedAt     DateTime     @default(now())
+
+  @@index([fromEmail])
+  @@index([receivedAt])
 }

@@ -92,6 +92,23 @@ export default async function LeadsPage() {
                 <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--text-muted)" }}>
                   Sent {lead.createdAt.toISOString()}
                 </p>
+                {lead.repliedAt && (
+                  <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--accent)" }}>
+                    Replied {lead.repliedAt.toISOString()} ({lead.replyCount} total)
+                  </p>
+                )}
+                {lead.lastReplySnippet && (
+                  <p
+                    style={{
+                      margin: "0 0 0.5rem",
+                      fontSize: "0.85rem",
+                      color: "var(--text-muted)",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    "{lead.lastReplySnippet}"
+                  </p>
+                )}
                 <details style={{ marginTop: "0.75rem" }}>
                   <summary
                     style={{

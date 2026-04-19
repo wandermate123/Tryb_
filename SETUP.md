@@ -135,7 +135,32 @@ For a live env checklist and raw JSON responses, use **`/console`**.
 
 ---
 
-## 10. Files you may edit later
+## 10. Track inbound replies (who replied)
+
+1. Pick a mailbox/domain for replies (the same domain used in `RESEND_FROM`).
+2. In Resend (or your mail provider), configure an inbound webhook to:
+
+   `https://<your-domain>/api/webhooks/resend/inbound`
+
+3. Add an authorization header to the webhook:
+
+   `Authorization: Bearer <RESEND_INBOUND_WEBHOOK_SECRET>`
+
+4. In your app env (`.env` and Vercel env), set:
+
+   `RESEND_INBOUND_WEBHOOK_SECRET=<same-random-secret>`
+
+5. Run Prisma sync once after pulling latest schema:
+
+   ```bash
+   npx prisma db push
+   ```
+
+After setup, each inbound reply is saved and the matched lead is marked `Replied` with reply timestamp/snippet.
+
+---
+
+## 11. Files you may edit later
 
 - `prisma/schema.prisma` — data model.
 - `app/api/cron/outbound/route.ts` — search filters, pacing, prompts, email copy.

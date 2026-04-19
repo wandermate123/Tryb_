@@ -82,13 +82,14 @@ export default async function LeadsSheetPage() {
                 <th className="sheet__th">Contact email</th>
                 <th className="sheet__th">Domain</th>
                 <th className="sheet__th">Status</th>
+                <th className="sheet__th">Replies</th>
                 <th className="sheet__th">Created</th>
               </tr>
             </thead>
             <tbody>
               {leads.length === 0 && (
                 <tr>
-                  <td className="sheet__cell sheet__cell--empty" colSpan={15}>
+                  <td className="sheet__cell sheet__cell--empty" colSpan={16}>
                     No rows yet.
                   </td>
                 </tr>
@@ -155,6 +156,15 @@ export default async function LeadsSheetPage() {
                       >
                         {lead.status}
                       </span>
+                    </Cell>
+                    <Cell>
+                      {lead.replyCount > 0 ? (
+                        <span className="sheet__nowrap" style={{ color: "var(--accent)" }}>
+                          {lead.replyCount} · {lead.repliedAt ? lead.repliedAt.toLocaleDateString() : "recent"}
+                        </span>
+                      ) : (
+                        <span className="sheet__muted">—</span>
+                      )}
                     </Cell>
                     <Cell>
                       <span className="sheet__muted sheet__nowrap">

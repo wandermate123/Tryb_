@@ -909,6 +909,7 @@ export async function GET(request: Request) {
               to,
               subject,
               text: pitch,
+              replyTo: "kabir@trybstudios.com",
             });
             if (isResendSendSuccess(sendResult)) {
               emailSent = true;
