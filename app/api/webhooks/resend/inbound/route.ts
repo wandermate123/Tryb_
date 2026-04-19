@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -107,7 +108,7 @@ export async function POST(request: Request) {
       textBody: textBody ?? undefined,
       htmlBody: htmlBody ?? undefined,
       messageId: messageId ?? undefined,
-      rawPayload: payload,
+      rawPayload: payload as Prisma.InputJsonValue,
     },
   });
 
